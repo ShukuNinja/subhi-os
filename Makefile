@@ -9,11 +9,11 @@ TARGET := build/subhi
 
 SOURCES := src/main.c src/vfs_disk.c src/vfs_format.c \
            src/vfs_inode.c src/vfs_alloc.c src/vfs_dir.c \
-           src/vfs_path.c
+           src/vfs_path.c src/vfs_file.c
 
 LIB_SOURCES := src/vfs_disk.c src/vfs_format.c \
                src/vfs_inode.c src/vfs_alloc.c \
-               src/vfs_dir.c src/vfs_path.c
+               src/vfs_dir.c src/vfs_path.c src/vfs_file.c
 
 OBJECTS := $(SOURCES:src/%.c=build/%.o)
 
@@ -23,6 +23,7 @@ TEST_INODE := build/test_inode
 TEST_ALLOC := build/test_alloc
 TEST_DIR := build/test_dir
 TEST_PATH := build/test_path
+TEST_FILE := build/test_file
 
 .PHONY: all clean test
 
@@ -83,14 +84,21 @@ $(TEST_PATH): tests/test_path.c $(LIB_SOURCES) \
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		tests/test_path.c $(LIB_SOURCES) -o $@
 
-test: $(TEST_DISK) $(TEST_FORMAT) $(TEST_INODE) \
-      $(TEST_ALLOC) $(TEST_DIR) $(TEST_PATH)
+$(TEST_FILE): tests/test_file.c $(LIB_SOURCES) \
+              include/vfs_file.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		tests/test_file.c $(LIB_SOURCES) -o $@
+
+test: $(TARGET) $(TEST_DISK) $(TEST_FORMAT) $(TEST_INODE) \
+      $(TEST_ALLOC) $(TEST_DIR) $(TEST_PATH) $(TEST_FILE)
 	./$(TEST_DISK)
 	./$(TEST_FORMAT)
 	./$(TEST_INODE)
 	./$(TEST_ALLOC)
 	./$(TEST_DIR)
 	./$(TEST_PATH)
+	./$(TEST_FILE)
 	bash ./tests/test_cli.sh
 
 clean:
