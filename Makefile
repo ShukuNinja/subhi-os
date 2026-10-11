@@ -9,11 +9,12 @@ TARGET := build/subhi
 
 SOURCES := src/main.c src/vfs_disk.c src/vfs_format.c \
            src/vfs_inode.c src/vfs_alloc.c src/vfs_dir.c \
-           src/vfs_path.c src/vfs_file.c
+           src/vfs_path.c src/vfs_file.c src/vfs_perm.c
 
 LIB_SOURCES := src/vfs_disk.c src/vfs_format.c \
                src/vfs_inode.c src/vfs_alloc.c \
-               src/vfs_dir.c src/vfs_path.c src/vfs_file.c
+               src/vfs_dir.c src/vfs_path.c \
+               src/vfs_file.c src/vfs_perm.c
 
 OBJECTS := $(SOURCES:src/%.c=build/%.o)
 
@@ -24,6 +25,7 @@ TEST_ALLOC := build/test_alloc
 TEST_DIR := build/test_dir
 TEST_PATH := build/test_path
 TEST_FILE := build/test_file
+TEST_PERM := build/test_perm
 
 .PHONY: all clean test
 
@@ -90,8 +92,14 @@ $(TEST_FILE): tests/test_file.c $(LIB_SOURCES) \
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		tests/test_file.c $(LIB_SOURCES) -o $@
 
+$(TEST_PERM): tests/test_perm.c src/vfs_perm.c \
+              include/vfs_perm.h include/vfs_inode.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		tests/test_perm.c src/vfs_perm.c -o $@
+
 test: $(TARGET) $(TEST_DISK) $(TEST_FORMAT) $(TEST_INODE) \
-      $(TEST_ALLOC) $(TEST_DIR) $(TEST_PATH) $(TEST_FILE)
+      $(TEST_ALLOC) $(TEST_DIR) $(TEST_PATH) $(TEST_FILE) $(TEST_PERM)
 	./$(TEST_DISK)
 	./$(TEST_FORMAT)
 	./$(TEST_INODE)
@@ -99,6 +107,7 @@ test: $(TARGET) $(TEST_DISK) $(TEST_FORMAT) $(TEST_INODE) \
 	./$(TEST_DIR)
 	./$(TEST_PATH)
 	./$(TEST_FILE)
+	./$(TEST_PERM)
 	bash ./tests/test_cli.sh
 
 clean:

@@ -7,10 +7,11 @@
 #include <errno.h>
 #include <string.h>
 
-int vfs_path_resolve(
+static int vfs_path_resolve_internal(
     struct vfs_disk *disk,
     const struct vfs_superblock *sb,
     const char *path,
+    const struct vfs_credentials *credentials,
     uint64_t *result_inode_number
 )
 {
@@ -73,6 +74,12 @@ int vfs_path_resolve(
                 return -1;
             }
 
+            if (credentials != NULL &&
+                vfs_check_access(
+                    &inode, credentials, VFS_ACCESS_EXECUTE) == -1) {
+                return -1;
+            }
+
             if (vfs_dir_lookup(
                     disk, sb, current_inode_number,
                     name, &next_inode_number) == -1) {
@@ -87,4 +94,32 @@ int vfs_path_resolve(
 
     *result_inode_number = current_inode_number;
     return 0;
+}
+
+int vfs_path_resolve(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *sb,
+    const char *path,
+    uint64_t *result_inode_number
+)
+{
+    return vfs_path_resolve_internal(
+        disk, sb, path, NULL, result_inode_number);
+}
+
+int vfs_path_resolve_as(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *sb,
+    const char *path,
+    const struct vfs_credentials *credentials,
+    uint64_t *result_inode_number
+)
+{
+    if (credentials == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return vfs_path_resolve_internal(
+        disk, sb, path, credentials, result_inode_number);
 }

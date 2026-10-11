@@ -4,6 +4,7 @@
 #include "vfs_alloc.h"
 #include "vfs_dir.h"
 #include "vfs_path.h"
+#include "vfs_perm.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -87,10 +88,11 @@ int vfs_file_create(
     uint32_t mode,
     uint32_t uid,
     uint32_t gid,
+    const struct vfs_credentials *credentials,
     uint64_t *result_inode_number
 )
 {
-    if (disk == NULL || sb == NULL || path == NULL) {
+    if (disk == NULL || sb == NULL || path == NULL || credentials == NULL) {
         errno = EINVAL;
         return -1;
     }
@@ -104,8 +106,9 @@ int vfs_file_create(
 
     uint64_t parent_inode_number;
 
-    if (vfs_path_resolve(
-            disk, sb, parent_path, &parent_inode_number) < 0) {
+    if (vfs_path_resolve_as(
+            disk, sb, parent_path, credentials,
+            &parent_inode_number) < 0) {
         int saved_errno = errno;
         free(parent_path);
         free(name);
@@ -128,6 +131,15 @@ int vfs_file_create(
     if (parent_inode.type != VFS_INODE_DIRECTORY) {
         free(name);
         errno = ENOTDIR;
+        return -1;
+    }
+
+    if (vfs_check_access(
+            &parent_inode, credentials,
+            VFS_ACCESS_WRITE | VFS_ACCESS_EXECUTE) < 0) {
+        int saved_errno = errno;
+        free(name);
+        errno = saved_errno;
         return -1;
     }
 
@@ -166,11 +178,12 @@ int vfs_file_read(
     const char *path,
     void *buffer,
     size_t buffer_capacity,
-    size_t *bytes_read
+    size_t *bytes_read,
+    const struct vfs_credentials *credentials
 )
 {
     if (disk == NULL || sb == NULL || path == NULL ||
-        bytes_read == NULL ||
+        credentials == NULL || bytes_read == NULL ||
         (buffer == NULL && buffer_capacity != 0U)) {
         errno = EINVAL;
         return -1;
@@ -180,8 +193,8 @@ int vfs_file_read(
 
     uint64_t inode_number;
 
-    if (vfs_path_resolve(
-            disk, sb, path, &inode_number) < 0) {
+    if (vfs_path_resolve_as(
+            disk, sb, path, credentials, &inode_number) < 0) {
         return -1;
     }
 
@@ -194,6 +207,10 @@ int vfs_file_read(
 
     if (inode.type != VFS_INODE_REGULAR) {
         errno = EISDIR;
+        return -1;
+    }
+
+    if (vfs_check_access(&inode, credentials, VFS_ACCESS_READ) < 0) {
         return -1;
     }
 
@@ -279,10 +296,12 @@ int vfs_file_write(
     const struct vfs_superblock *sb,
     const char *path,
     const void *buffer,
-    size_t size
+    size_t size,
+    const struct vfs_credentials *credentials
 )
 {
     if (disk == NULL || sb == NULL || path == NULL ||
+        credentials == NULL ||
         (buffer == NULL && size != 0U)) {
         errno = EINVAL;
         return -1;
@@ -295,8 +314,8 @@ int vfs_file_write(
 
     uint64_t inode_number;
 
-    if (vfs_path_resolve(
-            disk, sb, path, &inode_number) < 0) {
+    if (vfs_path_resolve_as(
+            disk, sb, path, credentials, &inode_number) < 0) {
         return -1;
     }
 
@@ -309,6 +328,10 @@ int vfs_file_write(
 
     if (inode.type != VFS_INODE_REGULAR) {
         errno = EISDIR;
+        return -1;
+    }
+
+    if (vfs_check_access(&inode, credentials, VFS_ACCESS_WRITE) < 0) {
         return -1;
     }
 
@@ -478,10 +501,12 @@ int vfs_file_write(
 int vfs_file_unlink(
     struct vfs_disk *disk,
     const struct vfs_superblock *sb,
-    const char *path
+    const char *path,
+    const struct vfs_credentials *credentials
 )
 {
-    if (disk == NULL || sb == NULL || path == NULL) {
+    if (disk == NULL || sb == NULL || path == NULL ||
+        credentials == NULL) {
         errno = EINVAL;
         return -1;
     }
@@ -500,8 +525,27 @@ int vfs_file_unlink(
 
     int result = -1;
 
-    if (vfs_path_resolve(
-            disk, sb, parent_path, &parent_inode_number) < 0) {
+    if (vfs_path_resolve_as(
+            disk, sb, parent_path, credentials,
+            &parent_inode_number) < 0) {
+        goto cleanup;
+    }
+
+    struct vfs_inode parent_inode;
+
+    if (vfs_inode_read(
+            disk, sb, parent_inode_number, &parent_inode) < 0) {
+        goto cleanup;
+    }
+
+    if (parent_inode.type != VFS_INODE_DIRECTORY) {
+        errno = ENOTDIR;
+        goto cleanup;
+    }
+
+    if (vfs_check_access(
+            &parent_inode, credentials,
+            VFS_ACCESS_WRITE | VFS_ACCESS_EXECUTE) < 0) {
         goto cleanup;
     }
 
@@ -660,4 +704,3 @@ cleanup:
     free(name);
     return result;
 }
-

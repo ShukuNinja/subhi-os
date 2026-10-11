@@ -1,3 +1,4 @@
+
 #define _POSIX_C_SOURCE 200809L
 
 #include "vfs_disk.h"
@@ -5,6 +6,7 @@
 #include "vfs_inode.h"
 #include "vfs_dir.h"
 #include "vfs_path.h"
+#include "vfs_perm.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -29,9 +31,9 @@ static int fail(const char *message, struct vfs_disk *disk)
 
 #define CHECK(condition, message)              \
     do {                                        \
-        if (!(condition)) {                    \
-            perror(message);                   \
-            return fail(message, &disk);       \
+        if (!(condition)) {                     \
+            perror(message);                    \
+            return fail(message, &disk);        \
         }                                       \
     } while (0)
 
@@ -39,6 +41,11 @@ int main(void)
 {
     struct vfs_disk disk = {.fd = -1, .total_blocks = 0};
     struct vfs_superblock sb;
+    struct vfs_credentials user = {
+        .uid = 1000U,
+        .gid = 1000U
+    };
+    struct vfs_inode saved_inode;
     uint64_t docs_inode;
     uint64_t nested_inode;
     uint64_t file_inode;
@@ -55,17 +62,17 @@ int main(void)
 
     CHECK(vfs_inode_allocate(
               &disk, &sb, VFS_INODE_DIRECTORY,
-              0755, 1000, 1000, &docs_inode) == 0,
+              0755U, 1000U, 1000U, &docs_inode) == 0,
           "allocate docs inode");
 
     CHECK(vfs_inode_allocate(
               &disk, &sb, VFS_INODE_DIRECTORY,
-              0755, 1000, 1000, &nested_inode) == 0,
+              0755U, 1000U, 1000U, &nested_inode) == 0,
           "allocate nested inode");
 
     CHECK(vfs_inode_allocate(
               &disk, &sb, VFS_INODE_REGULAR,
-              0644, 1000, 1000, &file_inode) == 0,
+              0644U, 1000U, 1000U, &file_inode) == 0,
           "allocate file inode");
 
     CHECK(vfs_dir_add(
@@ -80,6 +87,9 @@ int main(void)
               &disk, &sb, nested_inode, "notes.txt", file_inode) == 0,
           "add notes entry");
 
+    /*
+     * Existing path-resolution regression tests.
+     */
     CHECK(vfs_path_resolve(
               &disk, &sb, "/", &resolved_inode) == 0,
           "resolve root");
@@ -161,11 +171,77 @@ int main(void)
         return fail("NULL output pointer should return EINVAL", &disk);
     }
 
+    /*
+     * Permission-aware path resolution.
+     * Keep the disk open and the image present throughout these tests.
+     */
+    CHECK(vfs_path_resolve_as(
+              &disk, &sb, "/docs/nested/notes.txt",
+              &user, &resolved_inode) == 0,
+          "resolve path with execute permissions");
+
+    if (resolved_inode != file_inode) {
+        return fail("incorrect permission-aware resolution", &disk);
+    }
+
+    /*
+     * Save docs inode metadata before changing its permissions.
+     */
+    CHECK(vfs_inode_read(
+              &disk, &sb, docs_inode, &saved_inode) == 0,
+          "read docs inode before permission test");
+
+    /*
+     * Remove execute permission from docs.
+     * The caller owns docs, so mode 0644 grants read/write but not execute.
+     */
+    {
+        struct vfs_inode modified_inode = saved_inode;
+        modified_inode.mode = 0644U;
+
+        CHECK(vfs_inode_write(
+                  &disk, &sb, docs_inode, &modified_inode) == 0,
+              "remove docs execute permission");
+    }
+
+    errno = 0;
+    if (vfs_path_resolve_as(
+            &disk, &sb, "/docs/nested",
+            &user, &resolved_inode) != -1 || errno != EACCES) {
+        return fail(
+            "traversal without execute permission must return EACCES",
+            &disk);
+    }
+
+    /*
+     * The legacy resolver deliberately remains permission-unaware.
+     */
+    CHECK(vfs_path_resolve(
+              &disk, &sb, "/docs/nested",
+              &resolved_inode) == 0,
+          "legacy resolver compatibility");
+
+    /*
+     * Restore docs metadata before continuing.
+     */
+    CHECK(vfs_inode_write(
+              &disk, &sb, docs_inode, &saved_inode) == 0,
+          "restore docs inode permissions");
+
+    errno = 0;
+    if (vfs_path_resolve_as(
+            &disk, &sb, "/docs/nested",
+            NULL, &resolved_inode) != -1 || errno != EINVAL) {
+        return fail("NULL credentials must return EINVAL", &disk);
+    }
+
     CHECK(vfs_disk_flush(&disk) == 0, "vfs_disk_flush");
     CHECK(vfs_disk_close(&disk) == 0, "vfs_disk_close");
 
     (void)unlink(TEST_IMAGE);
 
     printf("Path resolution tests: PASS\n");
+    printf("Permission-aware path resolution tests: PASS\n");
+
     return EXIT_SUCCESS;
 }
