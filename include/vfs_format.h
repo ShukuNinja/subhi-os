@@ -2,7 +2,7 @@
 #define VFS_FORMAT_H
 
 #include "vfs_disk.h"
-
+#include <stddef.h>
 #include <stdint.h>
 
 #define VFS_MAGIC "SUBHIFS1"
@@ -40,6 +40,11 @@ int vfs_format_disk(struct vfs_disk *disk);
 int vfs_read_superblock(
     struct vfs_disk *disk,
     struct vfs_superblock *superblock
+);
+
+int vfs_write_superblock(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *superblock
 );
 
 #endif

@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "vfs_disk.h"
-
+#include <stddef.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>

@@ -1,6 +1,7 @@
 #include "vfs_format.h"
 #include "vfs_inode.h"
-
+#include "vfs_alloc.h"
+#include <stddef.h>
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
@@ -239,7 +240,7 @@ int vfs_read_superblock(
         sb.data_start !=
             sb.inode_table_start + sb.inode_table_blocks ||
         sb.data_start >= sb.total_blocks ||
-        sb.free_blocks != sb.total_blocks - sb.data_start - 1 ||
+        sb.free_blocks > sb.total_blocks - sb.data_start - 1 ||
         sb.root_inode != 0) {
         errno = EINVAL;
         return -1;
@@ -247,4 +248,22 @@ int vfs_read_superblock(
 
     *superblock = sb;
     return 0;
+}
+
+int vfs_write_superblock(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *superblock
+)
+{
+    if (disk == NULL || disk->fd < 0 || superblock == NULL ||
+        superblock->total_blocks != disk->total_blocks) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    unsigned char buffer[VFS_BLOCK_SIZE] = {0};
+
+    memcpy(buffer, superblock, sizeof(*superblock));
+
+    return vfs_disk_write_block(disk, 0, buffer);
 }

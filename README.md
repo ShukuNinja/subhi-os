@@ -13,6 +13,8 @@ engine implemented in C11.
 - Fixed-size inode records
 - Root inode initialization
 - Inode allocation, release, reuse, and exhaustion handling
+- First-fit data-block allocation and reclamation
+- Persistent free-block accounting
 - Command-line formatting and filesystem information commands
 
 ## Requirements

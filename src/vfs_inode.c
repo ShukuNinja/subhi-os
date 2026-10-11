@@ -1,5 +1,6 @@
 #include "vfs_inode.h"
-
+#include "vfs_alloc.h"
+#include <stddef.h>
 #include <errno.h>
 #include <string.h>
 #include <time.h>
