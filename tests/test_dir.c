@@ -5,18 +5,21 @@
 #include "vfs_format.h"
 #include "vfs_inode.h"
 #include "vfs_dir.h"
-#include "vfs_path.h"
+#include "vfs_alloc.h"
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#define TEST_IMAGE "build/test_path.img"
+#define TEST_IMAGE "build/test_dir.img"
 #define TEST_BLOCKS 1024ULL
+#define TEST_ENTRIES 65U
 
-static int fail(const char *message, struct vfs_disk *disk)
+static int fail(
+    const char *message,
+    struct vfs_disk *disk
+)
 {
     fprintf(stderr, "FAIL: %s\n", message);
 
@@ -25,162 +28,252 @@ static int fail(const char *message, struct vfs_disk *disk)
     }
 
     (void)unlink(TEST_IMAGE);
-    return EXIT_FAILURE;
+    return 1;
 }
-
-#define CHECK(condition, message)                 \
-    do {                                           \
-        if (!(condition)) {                       \
-            perror(message);                      \
-            return fail(message, &disk);          \
-        }                                          \
-    } while (0)
 
 int main(void)
 {
-    struct vfs_disk disk = {.fd = -1, .total_blocks = 0};
+    struct vfs_disk disk = {
+        .fd = -1,
+        .total_blocks = 0
+    };
+
     struct vfs_superblock sb;
-
-    uint64_t docs_inode;
-    uint64_t nested_inode;
-    uint64_t file_inode;
-    uint64_t resolved_inode;
-
-    char long_path[VFS_NAME_MAX + 3U];
+    uint64_t inodes[TEST_ENTRIES];
 
     (void)unlink(TEST_IMAGE);
 
-    printf("[1/5] Creating and formatting filesystem\n");
+    printf("[1/7] Formatting filesystem and allocating target inodes\n");
 
-    CHECK(vfs_disk_create(&disk, TEST_IMAGE, TEST_BLOCKS) == 0,
-          "vfs_disk_create");
-    CHECK(vfs_format_disk(&disk) == 0, "vfs_format_disk");
-    CHECK(vfs_read_superblock(&disk, &sb) == 0, "vfs_read_superblock");
-
-    printf("[2/5] Creating nested directory structure\n");
-
-    CHECK(vfs_inode_allocate(
-              &disk, &sb, VFS_INODE_DIRECTORY,
-              0755, 1000, 1000, &docs_inode) == 0,
-          "allocate docs inode");
-
-    CHECK(vfs_inode_allocate(
-              &disk, &sb, VFS_INODE_DIRECTORY,
-              0755, 1000, 1000, &nested_inode) == 0,
-          "allocate nested inode");
-
-    CHECK(vfs_inode_allocate(
-              &disk, &sb, VFS_INODE_REGULAR,
-              0644, 1000, 1000, &file_inode) == 0,
-          "allocate file inode");
-
-    CHECK(vfs_dir_add(
-              &disk, &sb, sb.root_inode,
-              "docs", docs_inode) == 0,
-          "add docs entry");
-
-    CHECK(vfs_dir_add(
-              &disk, &sb, docs_inode,
-              "nested", nested_inode) == 0,
-          "add nested entry");
-
-    CHECK(vfs_dir_add(
-              &disk, &sb, nested_inode,
-              "notes.txt", file_inode) == 0,
-          "add notes entry");
-
-    printf("[3/5] Testing successful path resolution\n");
-
-    CHECK(vfs_path_resolve(
-              &disk, &sb, "/", &resolved_inode) == 0,
-          "resolve root");
-    if (resolved_inode != sb.root_inode) {
-        return fail("root path resolved to wrong inode", &disk);
+    if (vfs_disk_create(&disk, TEST_IMAGE, TEST_BLOCKS) < 0 ||
+        vfs_format_disk(&disk) < 0 ||
+        vfs_read_superblock(&disk, &sb) < 0) {
+        perror("filesystem setup");
+        return fail("filesystem setup failed", &disk);
     }
 
-    CHECK(vfs_path_resolve(
-              &disk, &sb, "/docs", &resolved_inode) == 0,
-          "resolve docs");
-    if (resolved_inode != docs_inode) {
-        return fail("docs path resolved to wrong inode", &disk);
+    for (size_t i = 0; i < TEST_ENTRIES; i++) {
+        if (vfs_inode_allocate(
+                &disk, &sb, VFS_INODE_REGULAR,
+                0644, 1000, 1000, &inodes[i]) < 0) {
+            perror("vfs_inode_allocate");
+            return fail("target inode allocation failed", &disk);
+        }
     }
 
-    CHECK(vfs_path_resolve(
-              &disk, &sb, "/docs/nested", &resolved_inode) == 0,
-          "resolve nested");
-    if (resolved_inode != nested_inode) {
-        return fail("nested path resolved to wrong inode", &disk);
+    printf("[2/7] Adding and looking up directory entries\n");
+
+    if (vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            "alpha.txt", inodes[0]) < 0) {
+        perror("vfs_dir_add");
+        return fail("directory entry insertion failed", &disk);
     }
 
-    CHECK(vfs_path_resolve(
-              &disk, &sb, "/docs/nested/notes.txt",
-              &resolved_inode) == 0,
-          "resolve notes.txt");
-    if (resolved_inode != file_inode) {
-        return fail("file path resolved to wrong inode", &disk);
+    uint64_t found_inode = 0;
+
+    if (vfs_dir_lookup(
+            &disk, &sb, sb.root_inode,
+            "alpha.txt", &found_inode) < 0 ||
+        found_inode != inodes[0]) {
+        return fail("directory lookup returned the wrong inode", &disk);
     }
 
-    CHECK(vfs_path_resolve(
-              &disk, &sb, "//docs///nested/notes.txt/",
-              &resolved_inode) == 0,
-          "resolve repeated separators");
-    if (resolved_inode != file_inode) {
-        return fail("repeated-separator path resolved incorrectly", &disk);
-    }
-
-    printf("[4/5] Testing invalid paths and traversal errors\n");
+    printf("[3/7] Validating duplicate names and invalid lookups\n");
 
     errno = 0;
-    if (vfs_path_resolve(
-            &disk, &sb, "docs/nested/notes.txt",
-            &resolved_inode) != -1 || errno != EINVAL) {
-        return fail("relative path was not rejected with EINVAL", &disk);
+
+    if (vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            "alpha.txt", inodes[1]) != -1 ||
+        errno != EEXIST) {
+        return fail("duplicate directory name was not rejected", &disk);
     }
 
     errno = 0;
-    if (vfs_path_resolve(
-            &disk, &sb, "", &resolved_inode) != -1 || errno != EINVAL) {
-        return fail("empty path was not rejected with EINVAL", &disk);
+
+    if (vfs_dir_lookup(
+            &disk, &sb, sb.root_inode,
+            "missing.txt", &found_inode) != -1 ||
+        errno != ENOENT) {
+        return fail("missing directory entry was not reported", &disk);
     }
 
     errno = 0;
-    if (vfs_path_resolve(
-            &disk, &sb, "/docs/missing.txt",
-            &resolved_inode) != -1 || errno != ENOENT) {
-        return fail("missing path did not return ENOENT", &disk);
+
+    if (vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            "", inodes[1]) != -1 ||
+        errno != EINVAL) {
+        return fail("empty filename was not rejected", &disk);
     }
 
     errno = 0;
-    if (vfs_path_resolve(
-            &disk, &sb, "/docs/nested/notes.txt/child",
-            &resolved_inode) != -1 || errno != ENOTDIR) {
-        return fail("file traversal did not return ENOTDIR", &disk);
+
+    if (vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            "bad/name", inodes[1]) != -1 ||
+        errno != EINVAL) {
+        return fail("filename containing slash was not rejected", &disk);
     }
 
-    memset(long_path, 'a', sizeof(long_path) - 1U);
-    long_path[0] = '/';
-    long_path[sizeof(long_path) - 1U] = '\0';
+    char long_name[VFS_NAME_MAX + 2U];
+    memset(long_name, 'x', sizeof(long_name) - 1U);
+    long_name[sizeof(long_name) - 1U] = '\0';
 
     errno = 0;
-    if (vfs_path_resolve(
-            &disk, &sb, long_path, &resolved_inode) != -1 ||
+
+    if (vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            long_name, inodes[1]) != -1 ||
         errno != ENAMETOOLONG) {
-        return fail("overlong path component was not rejected", &disk);
+        return fail("overlong filename was not rejected", &disk);
+    }
+
+    printf("[4/7] Supporting inode zero and removing entries\n");
+
+    /*
+     * Inode zero is the root inode, so it must be a valid target.
+     */
+    if (vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            "root-link", sb.root_inode) < 0 ||
+        vfs_dir_lookup(
+            &disk, &sb, sb.root_inode,
+            "root-link", &found_inode) < 0 ||
+        found_inode != sb.root_inode) {
+        return fail("directory entry could not reference inode zero", &disk);
+    }
+
+    uint64_t removed_inode = 0;
+
+    if (vfs_dir_remove(
+            &disk, &sb, sb.root_inode,
+            "alpha.txt", &removed_inode) < 0 ||
+        removed_inode != inodes[0]) {
+        perror("vfs_dir_remove");
+        return fail("directory entry removal failed", &disk);
+    }
+
+    if (vfs_inode_is_allocated(&disk, &sb, inodes[0]) != 1) {
+        return fail("removing entry incorrectly released target inode", &disk);
     }
 
     errno = 0;
-    if (vfs_path_resolve(
-            &disk, &sb, "/", NULL) != -1 || errno != EINVAL) {
-        return fail("NULL output pointer was not rejected", &disk);
+
+    if (vfs_dir_lookup(
+            &disk, &sb, sb.root_inode,
+            "alpha.txt", &found_inode) != -1 ||
+        errno != ENOENT) {
+        return fail("removed directory entry is still visible", &disk);
     }
 
-    printf("[5/5] Flushing and closing filesystem\n");
+    if (vfs_dir_remove(
+            &disk, &sb, sb.root_inode,
+            "root-link", NULL) < 0) {
+        return fail("could not remove root-link entry", &disk);
+    }
 
-    CHECK(vfs_disk_flush(&disk) == 0, "vfs_disk_flush");
-    CHECK(vfs_disk_close(&disk) == 0, "vfs_disk_close");
+    printf("[5/7] Filling all 64 slots and reusing an empty slot\n");
 
-    (void)unlink(TEST_IMAGE);
+    char name[32];
 
-    printf("Path resolution tests: PASS\n");
-    return EXIT_SUCCESS;
+    for (size_t i = 0; i < 64U; i++) {
+        (void)snprintf(name, sizeof(name), "file-%02zu", i);
+
+        if (vfs_dir_add(
+                &disk, &sb, sb.root_inode,
+                name, inodes[i]) < 0) {
+            perror("vfs_dir_add");
+            return fail("failed to fill first directory block", &disk);
+        }
+    }
+
+    struct vfs_inode root;
+
+    if (vfs_inode_read(&disk, &sb, sb.root_inode, &root) < 0 ||
+        root.blocks_count != 1) {
+        return fail("directory grew before its first block was full", &disk);
+    }
+
+    if (vfs_dir_remove(
+            &disk, &sb, sb.root_inode,
+            "file-10", NULL) < 0 ||
+        vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            "replacement.txt", inodes[64]) < 0) {
+        perror("remove/reinsert directory entry");
+        return fail("directory slot reuse failed", &disk);
+    }
+
+    if (vfs_inode_read(&disk, &sb, sb.root_inode, &root) < 0 ||
+        root.blocks_count != 1) {
+        return fail("slot reuse unexpectedly allocated another block", &disk);
+    }
+
+    printf("[6/7] Growing directory to a second data block\n");
+
+    if (vfs_dir_add(
+            &disk, &sb, sb.root_inode,
+            "overflow.txt", inodes[64]) < 0) {
+        perror("vfs_dir_add growth");
+        return fail("directory growth failed", &disk);
+    }
+
+    if (vfs_inode_read(&disk, &sb, sb.root_inode, &root) < 0 ||
+        root.blocks_count != 2 ||
+        root.direct_blocks[1] < sb.data_start ||
+        root.direct_blocks[1] >= sb.total_blocks) {
+        return fail("second directory block was not attached correctly", &disk);
+    }
+
+    if (vfs_dir_lookup(
+            &disk, &sb, sb.root_inode,
+            "overflow.txt", &found_inode) < 0 ||
+        found_inode != inodes[64]) {
+        return fail("entry in second directory block was not found", &disk);
+    }
+
+    printf("[7/7] Verifying directory persistence after reopen\n");
+
+    if (vfs_disk_flush(&disk) < 0 ||
+        vfs_disk_close(&disk) < 0) {
+        perror("flush/close");
+        return fail("could not close test image", &disk);
+    }
+
+    disk.fd = -1;
+
+    if (vfs_disk_open(&disk, TEST_IMAGE) < 0 ||
+        vfs_read_superblock(&disk, &sb) < 0) {
+        perror("disk reopen");
+        return fail("could not reopen filesystem", &disk);
+    }
+
+    if (vfs_dir_lookup(
+            &disk, &sb, sb.root_inode,
+            "replacement.txt", &found_inode) < 0 ||
+        found_inode != inodes[64]) {
+        return fail("first-block entry did not persist", &disk);
+    }
+
+    if (vfs_dir_lookup(
+            &disk, &sb, sb.root_inode,
+            "overflow.txt", &found_inode) < 0 ||
+        found_inode != inodes[64]) {
+        return fail("second-block entry did not persist", &disk);
+    }
+
+    if (vfs_disk_close(&disk) < 0) {
+        perror("vfs_disk_close");
+        return fail("final disk close failed", NULL);
+    }
+
+    if (unlink(TEST_IMAGE) < 0) {
+        perror("unlink");
+        return fail("test image cleanup failed", NULL);
+    }
+
+    printf("All directory tests passed.\n");
+    return 0;
 }
