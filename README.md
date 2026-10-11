@@ -1,16 +1,19 @@
 # Subhi-OS
+
 Subhi-OS is an educational Linux-based virtual filesystem and storage
 engine implemented in C11.
 
-The project aims to demonstrate:
+## Current features
 
-- Disk-image-backed persistent storage
-- Superblock and inode-based metadata
-- Hierarchical directories and file operations
-- Block allocation and free-space management
-- Directory indexing and block caching
-- Metadata validation and recovery
-- Command-line administration and performance metrics
+- Disk-image-backed storage with 4096-byte blocks
+- Block-level reads, writes, and persistence checks
+- Version 2 filesystem format and superblock validation
+- Block-allocation bitmap
+- Inode-allocation bitmap
+- Fixed-size inode records
+- Root inode initialization
+- Inode allocation, release, reuse, and exhaustion handling
+- Command-line formatting and filesystem information commands
 
 ## Requirements
 

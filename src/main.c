@@ -104,8 +104,10 @@ static int command_info(const char *path)
     printf("Version: %" PRIu32 "\n", sb.version);
     printf("Block size: %" PRIu32 " bytes\n", sb.block_size);
     printf("Total blocks: %" PRIu64 "\n", sb.total_blocks);
-    printf("Bitmap start: %" PRIu64 "\n", sb.bitmap_start);
-    printf("Bitmap blocks: %" PRIu64 "\n", sb.bitmap_blocks);
+    printf("Block bitmap start: %" PRIu64 "\n", sb.bitmap_start);
+    printf("Block bitmap blocks: %" PRIu64 "\n", sb.bitmap_blocks);
+    printf("Inode bitmap start: %" PRIu64 "\n", sb.inode_bitmap_start);
+    printf("Inode bitmap blocks: %" PRIu64 "\n", sb.inode_bitmap_blocks);
     printf("Inode table start: %" PRIu64 "\n", sb.inode_table_start);
     printf("Inode table blocks: %" PRIu64 "\n", sb.inode_table_blocks);
     printf("Inode count: %" PRIu64 "\n", sb.inode_count);

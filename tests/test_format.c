@@ -2,6 +2,7 @@
 
 #include "vfs_disk.h"
 #include "vfs_format.h"
+#include "vfs_inode.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -21,6 +22,7 @@ int main(void)
 {
     struct vfs_disk disk = {.fd = -1, .total_blocks = 0};
     struct vfs_superblock sb;
+    struct vfs_inode root;
 
     unsigned char block[VFS_BLOCK_SIZE];
 
@@ -39,7 +41,7 @@ int main(void)
         return fail("formatting failed");
     }
 
-    printf("[2/5] Validating superblock layout\n");
+    printf("[2/5] Validating format version 2 layout\n");
 
     if (vfs_read_superblock(&disk, &sb) < 0) {
         perror("vfs_read_superblock");
@@ -47,56 +49,76 @@ int main(void)
         return fail("superblock validation failed");
     }
 
-    if (sb.total_blocks != TEST_BLOCKS ||
+    if (sb.version != 2 ||
+        sb.total_blocks != TEST_BLOCKS ||
         sb.bitmap_start != 1 ||
         sb.bitmap_blocks != 1 ||
-        sb.inode_table_start != 2 ||
+        sb.inode_bitmap_start != 2 ||
+        sb.inode_bitmap_blocks != 1 ||
+        sb.inode_table_start != 3 ||
         sb.inode_table_blocks != 4 ||
-        sb.data_start != 6 ||
-        sb.free_blocks != TEST_BLOCKS - 6 ||
+        sb.data_start != 7 ||
+        sb.free_blocks != TEST_BLOCKS - 8 ||
         sb.root_inode != 0) {
         vfs_disk_close(&disk);
         return fail("unexpected filesystem layout");
     }
 
-    printf("[3/5] Checking allocation bitmap\n");
+    printf("[3/5] Checking block and inode bitmaps\n");
 
     if (vfs_disk_read_block(&disk, sb.bitmap_start, block) < 0) {
         perror("vfs_disk_read_block");
         vfs_disk_close(&disk);
-        return fail("bitmap read failed");
+        return fail("block bitmap read failed");
     }
 
-    for (uint64_t i = 0; i < sb.data_start; i++) {
+    for (uint64_t i = 0; i <= sb.data_start; i++) {
         unsigned char mask = (unsigned char)(1U << (i % 8));
 
         if ((block[i / 8] & mask) == 0) {
             vfs_disk_close(&disk);
-            return fail("metadata block was not marked allocated");
+            return fail("metadata or root data block not allocated");
         }
     }
 
-    if ((block[sb.data_start / 8] &
-         (unsigned char)(1U << (sb.data_start % 8))) != 0) {
+    if (vfs_disk_read_block(
+            &disk, sb.inode_bitmap_start, block) < 0) {
+        perror("vfs_disk_read_block");
         vfs_disk_close(&disk);
-        return fail("first data block should be free");
+        return fail("inode bitmap read failed");
     }
 
-    printf("[4/5] Checking inode table initialization\n");
+    if ((block[0] & 1U) == 0 || (block[0] & 2U) != 0) {
+        vfs_disk_close(&disk);
+        return fail("root inode allocation bit is incorrect");
+    }
 
-    for (uint64_t i = 0; i < sb.inode_table_blocks; i++) {
-        if (vfs_disk_read_block(
-                &disk, sb.inode_table_start + i, block) < 0) {
-            perror("vfs_disk_read_block");
+    printf("[4/5] Checking root inode and directory block\n");
+
+    if (vfs_inode_read(&disk, &sb, 0, &root) < 0) {
+        perror("vfs_inode_read");
+        vfs_disk_close(&disk);
+        return fail("root inode read failed");
+    }
+
+    if (root.type != VFS_INODE_DIRECTORY ||
+        root.mode != 0755 ||
+        root.blocks_count != 1 ||
+        root.direct_blocks[0] != sb.data_start) {
+        vfs_disk_close(&disk);
+        return fail("root inode is incorrectly initialized");
+    }
+
+    if (vfs_disk_read_block(&disk, sb.data_start, block) < 0) {
+        perror("vfs_disk_read_block");
+        vfs_disk_close(&disk);
+        return fail("root directory block read failed");
+    }
+
+    for (size_t i = 0; i < sizeof(block); i++) {
+        if (block[i] != 0) {
             vfs_disk_close(&disk);
-            return fail("inode table read failed");
-        }
-
-        for (size_t j = 0; j < sizeof(block); j++) {
-            if (block[j] != 0) {
-                vfs_disk_close(&disk);
-                return fail("inode table was not zero-initialized");
-            }
+            return fail("root directory block is not empty");
         }
     }
 
