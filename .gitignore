@@ -1,0 +1,14 @@
+# Compiled artifacts
+build/
+*.o
+*.a
+*.so
+
+# Virtual disk images
+*.img
+*.disk
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
