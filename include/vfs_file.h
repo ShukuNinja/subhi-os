@@ -44,4 +44,34 @@ int vfs_file_read(
     size_t *bytes_read
 );
 
+/*
+ * Replace the entire contents of a regular file.
+ *
+ * A NULL buffer is permitted only when size is zero.
+ * Maximum supported file size is 32 KiB.
+ *
+ * Returns 0 on success, -1 on failure with errno set.
+ */
+int vfs_file_write(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *sb,
+    const char *path,
+    const void *buffer,
+    size_t size
+);
+
+/*
+ * Remove a regular file and reclaim its data blocks and inode.
+ *
+ * Directories cannot be removed through this operation.
+ * The path must be absolute.
+ *
+ * Returns 0 on success, -1 on failure with errno set.
+ */
+int vfs_file_unlink(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *sb,
+    const char *path
+);
+
 #endif
