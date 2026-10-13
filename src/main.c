@@ -2,6 +2,7 @@
 
 #include "vfs_disk.h"
 #include "vfs_format.h"
+#include "vfs_check.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -22,6 +23,7 @@ static void print_usage(const char *program)
     printf("  %s --version\n", program);
     printf("  %s format <image> <blocks>\n", program);
     printf("  %s info <image>\n", program);
+    printf("  %s check <image>\n", program);
 }
 
 static int parse_block_count(const char *text, uint64_t *blocks)
@@ -84,6 +86,27 @@ static int command_format(const char *path, const char *block_text)
     return 0;
 }
 
+static int command_check(const char *path)
+{
+    struct vfs_disk disk = {.fd = -1, .total_blocks = 0};
+    if (vfs_disk_open(&disk, path) < 0) {
+        perror("Error opening disk image");
+        return 1;
+    }
+
+    int result = vfs_check_filesystem(&disk, stdout);
+    int saved_errno = errno;
+    if (result < 0) {
+        errno = saved_errno;
+        perror("Error checking filesystem");
+    }
+    if (vfs_disk_close(&disk) < 0) {
+        perror("Error closing disk image");
+        return 1;
+    }
+    return result < 0 ? 1 : result;
+}
+
 static int command_info(const char *path)
 {
     struct vfs_disk disk = {.fd = -1, .total_blocks = 0};
@@ -141,6 +164,10 @@ int main(int argc, char *argv[])
 
     if (argc == 3 && strcmp(argv[1], "info") == 0) {
         return command_info(argv[2]);
+    }
+
+    if (argc == 3 && strcmp(argv[1], "check") == 0) {
+        return command_check(argv[2]);
     }
 
     print_usage(argv[0]);

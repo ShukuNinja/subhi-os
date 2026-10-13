@@ -2,7 +2,6 @@
 #define VFS_FORMAT_H
 
 #include "vfs_disk.h"
-#include <stddef.h>
 #include <stdint.h>
 
 #define VFS_MAGIC "SUBHIFS1"
