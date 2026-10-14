@@ -38,7 +38,7 @@ static int calculate_layout(
     sb->block_size = VFS_BLOCK_SIZE;
     sb->total_blocks = total_blocks;
 
-    sb->bitmap_start = 1;
+    sb->bitmap_start = VFS_JOURNAL_START + VFS_JOURNAL_BLOCKS;
     sb->bitmap_blocks = bitmap_blocks_for(total_blocks);
 
     sb->inode_bitmap_start =
@@ -194,7 +194,11 @@ int vfs_format_disk(struct vfs_disk *disk)
         return -1;
     }
 
-    return vfs_disk_flush(disk);
+    if (vfs_disk_flush(disk) < 0) {
+        return -1;
+    }
+
+    return vfs_disk_enable_journal(disk);
 }
 
 int vfs_read_superblock(
@@ -228,7 +232,7 @@ int vfs_read_superblock(
         sb.version != VFS_FORMAT_VERSION ||
         sb.block_size != VFS_BLOCK_SIZE ||
         sb.total_blocks != disk->total_blocks ||
-        sb.bitmap_start != 1 ||
+        sb.bitmap_start != VFS_JOURNAL_START + VFS_JOURNAL_BLOCKS ||
         sb.bitmap_blocks != expected_bitmap_blocks ||
         sb.inode_bitmap_start !=
             sb.bitmap_start + sb.bitmap_blocks ||

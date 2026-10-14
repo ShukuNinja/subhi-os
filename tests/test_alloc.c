@@ -43,13 +43,13 @@ int main(void)
         return fail("filesystem setup failed", &disk);
     }
 
-    if (sb.data_start != 7 || sb.free_blocks != 8) {
+    if (sb.data_start != 9 || sb.free_blocks != 6) {
         return fail("unexpected initial free-space accounting", &disk);
     }
 
     printf("[2/6] Allocating data blocks in first-fit order\n");
 
-    for (uint64_t expected = 8; expected < TEST_BLOCKS; expected++) {
+    for (uint64_t expected = 10; expected < TEST_BLOCKS; expected++) {
         uint64_t actual = UINT64_MAX;
 
         if (vfs_block_allocate(&disk, &actual) < 0) {

@@ -5,9 +5,99 @@
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #define ENTRIES_PER_BLOCK \
     (VFS_BLOCK_SIZE / sizeof(struct vfs_dir_entry))
+
+/*
+ * Small process-local directory index. The index is rebuilt from the
+ * authoritative on-disk directory blocks and invalidated after mutations.
+ * It does not alter the version-2 on-disk format.
+ */
+#define DIR_INDEX_SLOTS 4U
+#define DIR_INDEX_ENTRIES (VFS_DIRECT_BLOCKS * ENTRIES_PER_BLOCK)
+struct directory_index {
+    int valid;
+    int fd;
+    uint64_t inode_number;
+    dev_t device;
+    ino_t image_inode;
+    size_t count;
+    struct vfs_dir_entry entries[DIR_INDEX_ENTRIES];
+    uint64_t age;
+};
+static struct directory_index directory_indexes[DIR_INDEX_SLOTS];
+static uint64_t directory_index_clock;
+
+static int compare_entries(const void *left, const void *right)
+{
+    const struct vfs_dir_entry *a = left;
+    const struct vfs_dir_entry *b = right;
+    return strcmp(a->name, b->name);
+}
+
+static void invalidate_directory_index(int fd, uint64_t inode_number)
+{
+    for (size_t i = 0; i < DIR_INDEX_SLOTS; i++) {
+        if (directory_indexes[i].valid && directory_indexes[i].fd == fd &&
+            directory_indexes[i].inode_number == inode_number) {
+            directory_indexes[i].valid = 0;
+        }
+    }
+}
+
+static struct directory_index *get_directory_index(
+    struct vfs_disk *disk, uint64_t inode_number,
+    const struct vfs_inode *directory)
+{
+    struct stat image_stat;
+    if (fstat(disk->fd, &image_stat) < 0) return NULL;
+    struct directory_index *slot = NULL;
+    for (size_t i = 0; i < DIR_INDEX_SLOTS; i++) {
+        if (directory_indexes[i].valid && directory_indexes[i].fd == disk->fd &&
+            directory_indexes[i].device == image_stat.st_dev &&
+            directory_indexes[i].image_inode == image_stat.st_ino &&
+            directory_indexes[i].inode_number == inode_number) {
+            directory_indexes[i].age = ++directory_index_clock;
+            return &directory_indexes[i];
+        }
+        if (!directory_indexes[i].valid) slot = &directory_indexes[i];
+    }
+    if (slot == NULL) {
+        slot = &directory_indexes[0];
+        for (size_t i = 1; i < DIR_INDEX_SLOTS; i++)
+            if (directory_indexes[i].age < slot->age) slot = &directory_indexes[i];
+    }
+    slot->valid = 0;
+    slot->fd = disk->fd;
+    slot->device = image_stat.st_dev;
+    slot->image_inode = image_stat.st_ino;
+    slot->inode_number = inode_number;
+    slot->count = 0;
+    unsigned char buffer[VFS_BLOCK_SIZE];
+    for (uint32_t b = 0; b < directory->blocks_count; b++) {
+        if (vfs_disk_read_block(disk, directory->direct_blocks[b], buffer) < 0)
+            return NULL;
+        struct vfs_dir_entry entries[ENTRIES_PER_BLOCK];
+        memcpy(entries, buffer, sizeof(entries));
+        for (size_t e = 0; e < ENTRIES_PER_BLOCK; e++) {
+            if (entries[e].name[0] == '\0') continue;
+            if (memchr(entries[e].name, '\0', sizeof(entries[e].name)) == NULL) {
+                errno = EIO;
+                return NULL;
+            }
+            if (slot->count >= DIR_INDEX_ENTRIES) { errno = EIO; return NULL; }
+            slot->entries[slot->count++] = entries[e];
+        }
+    }
+    qsort(slot->entries, slot->count, sizeof(slot->entries[0]), compare_entries);
+    slot->age = ++directory_index_clock;
+    slot->valid = 1;
+    return slot;
+}
 
 /*
  * Validate a filename without reading beyond the permitted
@@ -139,6 +229,37 @@ static int find_entry(
     return 0;
 }
 
+int vfs_dir_iterate(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *sb,
+    uint64_t directory_inode_number,
+    vfs_dir_visit_fn visitor,
+    void *context
+)
+{
+    if (disk == NULL || sb == NULL || visitor == NULL) { errno = EINVAL; return -1; }
+    struct vfs_inode directory;
+    if (read_directory(disk, sb, directory_inode_number, &directory) < 0) return -1;
+    unsigned char buffer[VFS_BLOCK_SIZE];
+    for (uint32_t b = 0; b < directory.blocks_count; b++) {
+        if (vfs_disk_read_block(disk, directory.direct_blocks[b], buffer) < 0) return -1;
+        struct vfs_dir_entry entries[ENTRIES_PER_BLOCK];
+        memcpy(entries, buffer, sizeof(entries));
+        for (size_t e = 0; e < ENTRIES_PER_BLOCK; e++) {
+            if (entries[e].name[0] == '\0') continue;
+            if (memchr(entries[e].name, '\0', sizeof(entries[e].name)) == NULL ||
+                memchr(entries[e].name, '/', strlen(entries[e].name)) != NULL) {
+                errno = EIO; return -1;
+            }
+            int allocated = vfs_inode_is_allocated(disk, sb, entries[e].inode_number);
+            if (allocated < 0) return -1;
+            if (!allocated) { errno = EIO; return -1; }
+            if (visitor(&entries[e], context) != 0) return -1;
+        }
+    }
+    return 0;
+}
+
 int vfs_dir_lookup(
     struct vfs_disk *disk,
     const struct vfs_superblock *sb,
@@ -162,20 +283,17 @@ int vfs_dir_lookup(
         return -1;
     }
 
-    uint64_t target_inode;
-
-    int result = find_entry(
-        disk, &directory, name,
-        NULL, NULL, &target_inode);
-
-    if (result < 0) {
-        return -1;
-    }
-
-    if (result == 0) {
-        errno = ENOENT;
-        return -1;
-    }
+    struct directory_index *index = get_directory_index(
+        disk, directory_inode_number, &directory);
+    if (index == NULL) return -1;
+    struct vfs_dir_entry key = {0};
+    size_t name_length = strlen(name);
+    if (name_length > VFS_NAME_MAX) { errno = ENAMETOOLONG; return -1; }
+    memcpy(key.name, name, name_length + 1U);
+    struct vfs_dir_entry *found = bsearch(
+        &key, index->entries, index->count, sizeof(index->entries[0]), compare_entries);
+    if (found == NULL) { errno = ENOENT; return -1; }
+    uint64_t target_inode = found->inode_number;
 
     int allocated = vfs_inode_is_allocated(
         disk, sb, target_inode);
@@ -273,7 +391,7 @@ int vfs_dir_add(
                     &directory) < 0) {
                 return -1;
             }
-
+            invalidate_directory_index(disk->fd, directory_inode_number);
             return 0;
         }
     }
@@ -314,13 +432,10 @@ int vfs_dir_add(
 
     if (vfs_inode_write(
             disk, sb, directory_inode_number, &directory) < 0) {
-        /*
-         * The new block may already contain data. Do not release
-         * it here: the inode write might have partially succeeded.
-         */
+        /* The inode write may have partially succeeded. */
         return -1;
     }
-
+    invalidate_directory_index(disk->fd, directory_inode_number);
     return 0;
 }
 
@@ -386,6 +501,7 @@ int vfs_dir_remove(
         return -1;
     }
 
+    invalidate_directory_index(disk->fd, directory_inode_number);
     if (removed_inode_number != NULL) {
         *removed_inode_number = target_inode;
     }

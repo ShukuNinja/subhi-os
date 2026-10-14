@@ -18,6 +18,17 @@ _Static_assert(
     "directory entry must be exactly 64 bytes"
 );
 
+typedef int (*vfs_dir_visit_fn)(const struct vfs_dir_entry *entry, void *context);
+
+/* Visit each active directory entry. Return -1 if visitor aborts. */
+int vfs_dir_iterate(
+    struct vfs_disk *disk,
+    const struct vfs_superblock *sb,
+    uint64_t directory_inode_number,
+    vfs_dir_visit_fn visitor,
+    void *context
+);
+
 /* Look up a name and return its inode number. */
 int vfs_dir_lookup(
     struct vfs_disk *disk,

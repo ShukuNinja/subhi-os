@@ -16,7 +16,8 @@ SOURCES := src/main.c \
            src/vfs_path.c \
            src/vfs_file.c \
            src/vfs_perm.c \
-           src/vfs_check.c
+           src/vfs_check.c \
+           src/vfs_namespace.c
 
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 
@@ -29,7 +30,8 @@ LIB_SOURCES := src/vfs_disk.c \
                src/vfs_dir.c \
                src/vfs_path.c \
                src/vfs_file.c \
-               src/vfs_perm.c
+               src/vfs_perm.c \
+               src/vfs_namespace.c
 
 TEST_DISK   := build/test_disk
 TEST_FORMAT := build/test_format
@@ -40,6 +42,7 @@ TEST_PATH   := build/test_path
 TEST_FILE   := build/test_file
 TEST_PERM   := build/test_perm
 TEST_CHECK  := build/test_check
+TEST_JOURNAL := build/test_journal
 
 .PHONY: all clean test
 
@@ -130,10 +133,18 @@ $(TEST_CHECK): tests/test_check.c $(LIB_SOURCES) src/vfs_check.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		tests/test_check.c $(LIB_SOURCES) src/vfs_check.c -o $@
 
+# Write-ahead journal recovery test.
+$(TEST_JOURNAL): tests/test_journal.c src/vfs_disk.c src/vfs_format.c \
+                 src/vfs_inode.c src/vfs_alloc.c include/vfs_disk.h \
+                 include/vfs_format.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_journal.c src/vfs_disk.c \
+		src/vfs_format.c src/vfs_inode.c src/vfs_alloc.c -o $@
+
 # Run the complete test suite.
 test: $(TARGET) $(TEST_DISK) $(TEST_FORMAT) $(TEST_INODE) \
       $(TEST_ALLOC) $(TEST_DIR) $(TEST_PATH) $(TEST_FILE) \
-      $(TEST_PERM) $(TEST_CHECK)
+      $(TEST_PERM) $(TEST_CHECK) $(TEST_JOURNAL)
 	./$(TEST_DISK)
 	./$(TEST_FORMAT)
 	./$(TEST_INODE)
@@ -143,6 +154,7 @@ test: $(TARGET) $(TEST_DISK) $(TEST_FORMAT) $(TEST_INODE) \
 	./$(TEST_FILE)
 	./$(TEST_PERM)
 	./$(TEST_CHECK)
+	./$(TEST_JOURNAL)
 	bash ./tests/test_cli.sh
 
 # Remove generated build artifacts.

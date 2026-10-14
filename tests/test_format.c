@@ -41,7 +41,7 @@ int main(void)
         return fail("formatting failed");
     }
 
-    printf("[2/5] Validating format version 2 layout\n");
+    printf("[2/5] Validating format version 3 layout\n");
 
     if (vfs_read_superblock(&disk, &sb) < 0) {
         perror("vfs_read_superblock");
@@ -49,16 +49,16 @@ int main(void)
         return fail("superblock validation failed");
     }
 
-    if (sb.version != 2 ||
+    if (sb.version != 3 ||
         sb.total_blocks != TEST_BLOCKS ||
-        sb.bitmap_start != 1 ||
+        sb.bitmap_start != 3 ||
         sb.bitmap_blocks != 1 ||
-        sb.inode_bitmap_start != 2 ||
+        sb.inode_bitmap_start != 4 ||
         sb.inode_bitmap_blocks != 1 ||
-        sb.inode_table_start != 3 ||
+        sb.inode_table_start != 5 ||
         sb.inode_table_blocks != 4 ||
-        sb.data_start != 7 ||
-        sb.free_blocks != TEST_BLOCKS - 8 ||
+        sb.data_start != 9 ||
+        sb.free_blocks != TEST_BLOCKS - 10 ||
         sb.root_inode != 0) {
         vfs_disk_close(&disk);
         return fail("unexpected filesystem layout");
