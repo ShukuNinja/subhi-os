@@ -1,6 +1,6 @@
 # Subhi-OS
 
-Subhi-OS is an educational Linux-based virtual filesystem and storage engine implemented in C11. It uses a persistent disk-image-backed storage layer and uses **filesystem format version 3**.
+Subhi-OS is an educational Linux-based virtual filesystem and storage engine implemented in C. It uses a persistent disk-image-backed storage layer and uses **filesystem format version 3**.
 
 ## Implemented capabilities
 
